@@ -13,8 +13,115 @@
  */
 
 import { useEffect, useRef } from "react";
+import type { HTMLAttributes } from "react";
 
 import "./GhostFibers.css";
+
+type HoverEffectName = "focus" | "part" | "none";
+type Rgb = [number, number, number];
+
+export interface GhostFibersCanvasProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
+  glowColor?: string;
+  lineColor?: string;
+  secondaryColor?: string;
+  scale?: number;
+  rotation?: number;
+  rollSpeed?: number;
+  layers?: number;
+  waves?: number;
+  twist?: number;
+  threads?: number;
+  volume?: number;
+  spread?: number;
+  thickness?: number;
+  flow?: number;
+  foldGlow?: number;
+  perspective?: number;
+  depthOfField?: number;
+  focusDepth?: number;
+  particles?: number;
+  sparkle?: number;
+  brightness?: number;
+  vignette?: number;
+  speed?: number;
+  mouseInteraction?: boolean;
+  hoverEffect?: HoverEffectName;
+  mouseStrength?: number;
+  pulseOnClick?: boolean;
+  intro?: boolean;
+  dpr?: number;
+  paused?: boolean;
+}
+
+interface CanvasSettings {
+  glowColor: string;
+  lineColor: string | undefined;
+  secondaryColor: string | undefined;
+  scale: number;
+  rotation: number;
+  rollSpeed: number;
+  layers: number;
+  waves: number;
+  twist: number;
+  threads: number;
+  volume: number;
+  spread: number;
+  thickness: number;
+  flow: number;
+  foldGlow: number;
+  perspective: number;
+  depthOfField: number;
+  focusDepth: number;
+  particles: number;
+  sparkle: number;
+  brightness: number;
+  vignette: number;
+  speed: number;
+  mouseInteraction: boolean;
+  hover: number;
+  mouseStrength: number;
+  pulseOnClick: boolean;
+  intro: boolean;
+  paused: boolean;
+  dpr?: number;
+}
+
+interface CanvasState {
+  time: number;
+  roll: number;
+  intro: number;
+  width: number;
+  height: number;
+  fit: number;
+  colorKey: string;
+  glow: Rgb;
+  secondary: Rgb;
+  line: Rgb;
+  focus: number;
+  hoverPresence: number;
+}
+
+interface RibbonSample {
+  s: number;
+  c: [number, number, number];
+  n0: [number, number, number];
+  b0: [number, number, number];
+  hw: number;
+}
+
+interface FiberPoint {
+  x: number;
+  y: number;
+  depth: number;
+  vis: number;
+  boost: number;
+}
+
+interface ScreenProjection {
+  x: number;
+  y: number;
+  depth: number;
+}
 
 const CAMERA = 7.5;
 const FOV = 0.56;
@@ -26,7 +133,7 @@ const MAX_RENDER_DIM = 2400;
 const SAMPLES = 28;
 const DEPTH_SPREAD = 0.12;
 
-const PLACEMENTS = [
+const PLACEMENTS: ReadonlyArray<readonly [number, number, number, number]> = [
   [0, 0, 0, 0],
   [1.9, -4.6, -0.08, 2.4],
   [-1.05, 2.0, 0.12, 4.1],
@@ -34,19 +141,19 @@ const PLACEMENTS = [
 const RIBBON_GAIN = [1, 0.5, 0.55];
 const RIBBON_TINT = [0, 0.75, 0.35];
 
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-const mix = (a, b, t) => a + (b - a) * t;
-const hash11 = (n) => {
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+const hash11 = (n: number) => {
   const x = Math.sin(n * 91.3458) * 47453.5453;
   return x - Math.floor(x);
 };
-const smoothstep = (edge0, edge1, x) => {
+const smoothstep = (edge0: number, edge1: number, x: number) => {
   const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
 };
 
 /* Column-major matrices, identical to the WebGL implementation. */
-const frustum = (fov, aspect, near, far) => {
+const frustum = (fov: number, aspect: number, near: number, far: number): number[] => {
   const f = 1 / Math.tan(fov / 2);
   const nf = 1 / (near - far);
   return [
@@ -57,21 +164,21 @@ const frustum = (fov, aspect, near, far) => {
   ];
 };
 
-const multiply = (a, b) => {
-  const out = new Array(16);
+const multiply = (a: number[], b: number[]): number[] => {
+  const out = new Array<number>(16);
   for (let col = 0; col < 4; col += 1) {
     for (let row = 0; row < 4; row += 1) {
       out[col * 4 + row] =
-        a[row] * b[col * 4] +
-        a[4 + row] * b[col * 4 + 1] +
-        a[8 + row] * b[col * 4 + 2] +
-        a[12 + row] * b[col * 4 + 3];
+        a[row]! * b[col * 4]! +
+        a[4 + row]! * b[col * 4 + 1]! +
+        a[8 + row]! * b[col * 4 + 2]! +
+        a[12 + row]! * b[col * 4 + 3]!;
     }
   }
   return out;
 };
 
-const orientation = (yaw, pitch, roll) => {
+const orientation = (yaw: number, pitch: number, roll: number): number[] => {
   const cy = Math.cos(yaw);
   const sy = Math.sin(yaw);
   const cp = Math.cos(pitch);
@@ -81,12 +188,12 @@ const orientation = (yaw, pitch, roll) => {
   const ry = [cy, 0, -sy, 0, 1, 0, sy, 0, cy];
   const rx = [1, 0, 0, 0, cp, sp, 0, -sp, cp];
   const rz = [cr, sr, 0, -sr, cr, 0, 0, 0, 1];
-  const mul = (a, b) => {
-    const out = new Array(9);
+  const mul = (a: number[], b: number[]): number[] => {
+    const out = new Array<number>(9);
     for (let col = 0; col < 3; col += 1) {
       for (let row = 0; row < 3; row += 1) {
         out[col * 3 + row] =
-          a[row] * b[col * 3] + a[3 + row] * b[col * 3 + 1] + a[6 + row] * b[col * 3 + 2];
+          a[row]! * b[col * 3]! + a[3 + row]! * b[col * 3 + 1]! + a[6 + row]! * b[col * 3 + 2]!;
       }
     }
     return out;
@@ -94,15 +201,15 @@ const orientation = (yaw, pitch, roll) => {
   return mul(rz, mul(rx, ry));
 };
 
-const projectPoint = (m, x, y, z) => {
-  const cx = m[0] * x + m[4] * y + m[8] * z + m[12];
-  const cy = m[1] * x + m[5] * y + m[9] * z + m[13];
-  const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+const projectPoint = (m: number[], x: number, y: number, z: number): ScreenProjection => {
+  const cx = m[0]! * x + m[4]! * y + m[8]! * z + m[12]!;
+  const cy = m[1]! * x + m[5]! * y + m[9]! * z + m[13]!;
+  const cw = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
   const inv = 1 / (Math.abs(cw) < 1e-6 ? 1e-6 : cw);
   return { x: cx * inv, y: cy * inv, depth: cw };
 };
 
-const parseColor = (value) => {
+const parseColor = (value?: string): Rgb | null => {
   if (!value) return null;
   let hex = String(value).trim();
   if (hex[0] === "#") hex = hex.slice(1);
@@ -113,12 +220,12 @@ const parseColor = (value) => {
   return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
 };
 
-const makeGlowSprite = (rgb, tight) => {
+const makeGlowSprite = (rgb: Rgb, tight: boolean) => {
   const size = 128;
   const sprite = document.createElement("canvas");
   sprite.width = size;
   sprite.height = size;
-  const spriteCtx = sprite.getContext("2d");
+  const spriteCtx = sprite.getContext("2d")!;
   const [r, g, b] = rgb;
   const grad = spriteCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
   grad.addColorStop(0, `rgba(${r},${g},${b},1)`);
@@ -163,15 +270,25 @@ const GhostFibersCanvas = ({
   paused = false,
   className = "",
   ...rest
-}) => {
-  const containerRef = useRef(null);
-  const canvasRef = useRef(null);
-  const pointerRef = useRef({ x: 0, y: 0, inside: false });
-  const lookRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
-  const hoverRef = useRef({ x: 0, y: 0, presence: 0, placed: false });
-  const pulseRef = useRef({ s: 0, age: 9, strength: 0, ribbon: 0 });
+}: GhostFibersCanvasProps) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pointerRef = useRef<{ x: number; y: number; inside: boolean }>({ x: 0, y: 0, inside: false });
+  const lookRef = useRef<{ x: number; y: number; vx: number; vy: number }>({ x: 0, y: 0, vx: 0, vy: 0 });
+  const hoverRef = useRef<{ x: number; y: number; presence: number; placed: boolean }>({
+    x: 0,
+    y: 0,
+    presence: 0,
+    placed: false,
+  });
+  const pulseRef = useRef<{ s: number; age: number; strength: number; ribbon: number }>({
+    s: 0,
+    age: 9,
+    strength: 0,
+    ribbon: 0,
+  });
 
-  const settings = {
+  const settings: CanvasSettings = {
     glowColor,
     lineColor,
     secondaryColor,
@@ -203,7 +320,7 @@ const GhostFibersCanvas = ({
     paused,
     dpr,
   };
-  const settingsRef = useRef(settings);
+  const settingsRef = useRef<CanvasSettings>(settings);
   settingsRef.current = settings;
 
   useEffect(() => {
@@ -214,7 +331,7 @@ const GhostFibersCanvas = ({
     if (!ctx) return undefined;
 
     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    const state = {
+    const state: CanvasState = {
       time: 0,
       roll: 0,
       intro: settingsRef.current.intro && !reduce ? 0 : INTRO_SECONDS,
@@ -236,27 +353,34 @@ const GhostFibersCanvas = ({
     let glowSprite = makeGlowSprite(state.glow, false);
     let highlightSprite = makeGlowSprite(state.line, true);
     let ribbonColors = RIBBON_TINT.map((tint) =>
-      state.glow.map((c, i) => Math.round(c + (state.secondary[i] - c) * tint)),
+      state.glow.map((c, i) => Math.round(c + (state.secondary[i]! - c) * tint)),
     );
 
-    const resolveColors = (conf) => {
+    const resolveColors = (conf: CanvasSettings): void => {
       const key = `${conf.glowColor}|${conf.lineColor}|${conf.secondaryColor}`;
       if (key === state.colorKey) return;
       state.colorKey = key;
-      const glow = parseColor(conf.glowColor) || [140, 92, 246];
-      const secondary = parseColor(conf.secondaryColor) || glow.map((c) => Math.round(c * 0.8));
-      const line = parseColor(conf.lineColor) || glow.map((c) => Math.round(c + (255 - c) * 0.72));
+      const glow: Rgb = parseColor(conf.glowColor) || [140, 92, 246];
+      const secondary: Rgb =
+        parseColor(conf.secondaryColor) || (glow.map((c) => Math.round(c * 0.8)) as Rgb);
+      const line: Rgb =
+        parseColor(conf.lineColor) || (glow.map((c) => Math.round(c + (255 - c) * 0.72)) as Rgb);
       state.glow = glow;
       state.secondary = secondary;
       state.line = line;
       glowSprite = makeGlowSprite(glow, false);
       highlightSprite = makeGlowSprite(line, true);
       ribbonColors = RIBBON_TINT.map((tint) =>
-        glow.map((c, i) => Math.round(c + (secondary[i] - c) * tint)),
+        glow.map((c, i) => Math.round(c + (secondary[i]! - c) * tint)),
       );
     };
 
-    const centerLocal = (s, t, place, waves) => {
+    const centerLocal = (
+      s: number,
+      t: number,
+      place: readonly [number, number, number, number],
+      waves: number,
+    ): [number, number, number] => {
       const ph = place[3];
       const x = s * RIBBON_LENGTH;
       const y =
@@ -269,10 +393,10 @@ const GhostFibersCanvas = ({
       return [x, y, z];
     };
 
-    const buildPath = (ribbon, conf) => {
-      const place = PLACEMENTS[ribbon];
+    const buildPath = (ribbon: number, conf: CanvasSettings): RibbonSample[] => {
+      const place = PLACEMENTS[ribbon]!;
       const width = 0.62 * conf.spread;
-      const out = new Array(SAMPLES);
+      const out = new Array<RibbonSample>(SAMPLES);
       for (let i = 0; i < SAMPLES; i += 1) {
         const s = (i + 0.5) / SAMPLES - 0.5;
         const c0 = centerLocal(s, state.time, place, conf.waves);
@@ -301,7 +425,7 @@ const GhostFibersCanvas = ({
       return out;
     };
 
-    const render = () => {
+    const render = (): void => {
       const conf = settingsRef.current;
       resolveColors(conf);
       const deviceW = canvas.width;
@@ -319,7 +443,7 @@ const GhostFibersCanvas = ({
       ctx.lineJoin = "round";
 
       const aspect = state.width / Math.max(state.height, 1);
-      const eye = [0, 0, CAMERA];
+      const eye: [number, number, number] = [0, 0, CAMERA];
       const projection = frustum(FOV, aspect, 0.1, 60);
       const view = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -eye[0], -eye[1], -eye[2], 1];
       const viewProj = multiply(projection, view);
@@ -330,7 +454,7 @@ const GhostFibersCanvas = ({
       );
       const scaleFit = conf.scale * state.fit;
 
-      const paths = new Array(conf.layers);
+      const paths = new Array<RibbonSample[]>(conf.layers);
       for (let ribbon = 0; ribbon < conf.layers; ribbon += 1) {
         paths[ribbon] = buildPath(ribbon, conf);
       }
@@ -340,9 +464,9 @@ const GhostFibersCanvas = ({
       const pulse = pulseRef.current;
 
       for (let ribbon = 0; ribbon < conf.layers; ribbon += 1) {
-        const place = PLACEMENTS[ribbon];
-        const path = paths[ribbon];
-        const gain = RIBBON_GAIN[ribbon];
+        const place = PLACEMENTS[ribbon]!;
+        const path = paths[ribbon]!;
+        const gain = RIBBON_GAIN[ribbon]!;
         const color = ribbonColors[ribbon] || state.glow;
         const rgb = `${color[0]},${color[1]},${color[2]}`;
         const perLayer = Math.max(Math.floor(conf.threads / 3), 1);
@@ -362,9 +486,9 @@ const GhostFibersCanvas = ({
           const twPhase = hash11(f * 13.7 + ribbon * 3);
           const pulseGate = Math.abs(pulse.ribbon - ribbon) < 0.5 ? 1 : 0.35;
 
-          const pts = new Array(SAMPLES);
+          const pts = new Array<FiberPoint>(SAMPLES);
           for (let i = 0; i < SAMPLES; i += 1) {
-            const base = path[i];
+            const base = path[i]!;
             const s = base.s;
             const x = s * RIBBON_LENGTH;
             const th =
@@ -389,9 +513,9 @@ const GhostFibersCanvas = ({
             const sx0 = lx * scaleFit;
             const sy0 = ly * scaleFit;
             const sz0 = lz * scaleFit;
-            const wx = orient[0] * sx0 + orient[3] * sy0 + orient[6] * sz0;
-            const wy = orient[1] * sx0 + orient[4] * sy0 + orient[7] * sz0;
-            const wz = orient[2] * sx0 + orient[5] * sy0 + orient[8] * sz0;
+            const wx = orient[0]! * sx0 + orient[3]! * sy0 + orient[6]! * sz0;
+            const wy = orient[1]! * sx0 + orient[4]! * sy0 + orient[7]! * sz0;
+            const wz = orient[2]! * sx0 + orient[5]! * sy0 + orient[8]! * sz0;
             const clip = projectPoint(viewProj, wx, wy, wz);
             const depth = clip.depth;
             const endFade = smoothstep(0.5, 0.4, Math.abs(s)) * smoothstep(1.6, 4.2, depth);
@@ -408,7 +532,7 @@ const GhostFibersCanvas = ({
             };
           }
 
-          let run = [];
+          let run: FiberPoint[] = [];
           const flush = () => {
             if (run.length < 2) {
               run = [];
@@ -417,8 +541,8 @@ const GhostFibersCanvas = ({
             let depthSum = 0;
             let boostSum = 0;
             for (let k = 0; k < run.length; k += 1) {
-              depthSum += run[k].depth;
-              boostSum += run[k].boost;
+              depthSum += run[k]!.depth;
+              boostSum += run[k]!.boost;
             }
             const avgDepth = depthSum / run.length;
             const avgBoost = boostSum / run.length;
@@ -438,9 +562,9 @@ const GhostFibersCanvas = ({
             );
             if (alpha > 0.004) {
               ctx.beginPath();
-              ctx.moveTo(run[0].x, run[0].y);
+              ctx.moveTo(run[0]!.x, run[0]!.y);
               for (let k = 1; k < run.length; k += 1) {
-                ctx.lineTo(run[k].x, run[k].y);
+                ctx.lineTo(run[k]!.x, run[k]!.y);
               }
               ctx.strokeStyle = `rgba(${rgb},${(alpha * 0.14).toFixed(3)})`;
               ctx.lineWidth = width * 5;
@@ -453,7 +577,7 @@ const GhostFibersCanvas = ({
           };
 
           for (let i = 0; i < SAMPLES; i += 1) {
-            const p = pts[i];
+            const p = pts[i]!;
             if (p.vis > 0.001 && p.depth > 0.2) run.push(p);
             else flush();
           }
@@ -481,9 +605,9 @@ const GhostFibersCanvas = ({
 
       const dustCount = Math.round(220 * conf.particles);
       if (dustCount > 0) {
-        const box = [9, 5.4, 6];
+        const box: [number, number, number] = [9, 5.4, 6];
         for (let id = 0; id < dustCount; id += 1) {
-          const se = [
+          const se: [number, number, number] = [
             hash11(id * 1.37 + 0.3),
             hash11(id * 2.91 + 1.7),
             hash11(id * 4.17 + 2.9),
@@ -543,7 +667,7 @@ const GhostFibersCanvas = ({
       }
     };
 
-    const resize = () => {
+    const resize = (): void => {
       const conf = settingsRef.current;
       const width = Math.max(1, container.clientWidth);
       const height = Math.max(1, container.clientHeight);
@@ -562,7 +686,7 @@ const GhostFibersCanvas = ({
       render();
     };
 
-    const frame = (now) => {
+    const frame = (now: number): void => {
       raf = 0;
       if (!alive || !visible || document.hidden) return;
       const conf = settingsRef.current;
@@ -614,11 +738,11 @@ const GhostFibersCanvas = ({
       else last = 0;
     };
 
-    const wake = () => {
+    const wake = (): void => {
       if (!raf && alive && visible && !document.hidden) raf = requestAnimationFrame(frame);
     };
 
-    const onPointerMove = (event) => {
+    const onPointerMove = (event: PointerEvent): void => {
       const rect = container.getBoundingClientRect();
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
@@ -628,7 +752,7 @@ const GhostFibersCanvas = ({
       wake();
     };
 
-    const onPointerDown = (event) => {
+    const onPointerDown = (event: PointerEvent): void => {
       const conf = settingsRef.current;
       if (!conf.mouseInteraction || !conf.pulseOnClick || event.button !== 0 || reduce) return;
       if (
@@ -650,12 +774,12 @@ const GhostFibersCanvas = ({
       wake();
     };
 
-    const onPointerLeave = () => {
+    const onPointerLeave = (): void => {
       pointerRef.current.inside = false;
       wake();
     };
 
-    const onVisibility = () => {
+    const onVisibility = (): void => {
       last = 0;
       wake();
     };

@@ -1,15 +1,8 @@
 import { useEffect, useState } from "react";
-import type { ComponentType } from "react";
 
 import GhostFibers from "./GhostFibers";
+import type { GhostFibersProps } from "./GhostFibers";
 import GhostFibersCanvas from "./GhostFibersCanvas";
-
-/**
- * The shadcn/ReactBits component is written in JS, so we cast it to a typed
- * component to keep the rest of the app type-safe.
- */
-const WebGLGhostFibers = GhostFibers as unknown as ComponentType<Record<string, unknown>>;
-const CanvasGhostFibers = GhostFibersCanvas as unknown as ComponentType<Record<string, unknown>>;
 
 /**
  * Returns true only when a WebGL2 context can actually be created. Some
@@ -29,7 +22,7 @@ function detectWebGL2(): boolean {
   }
 }
 
-type GhostFibersBackgroundProps = Record<string, unknown>;
+export type GhostFibersBackgroundProps = GhostFibersProps;
 
 /**
  * Renders the WebGL2 `GhostFibers` background when the browser supports it and
@@ -48,11 +41,7 @@ export function GhostFibersBackground(props: GhostFibersBackgroundProps) {
     return <div className="ghost-fibers-container" aria-hidden="true" />;
   }
 
-  return supported ? (
-    <WebGLGhostFibers {...props} />
-  ) : (
-    <CanvasGhostFibers {...props} />
-  );
+  return supported ? <GhostFibers {...props} /> : <GhostFibersCanvas {...props} />;
 }
 
 export default GhostFibersBackground;

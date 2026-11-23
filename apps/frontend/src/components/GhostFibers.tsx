@@ -1,8 +1,145 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import type { HTMLAttributes } from 'react';
 
 import './GhostFibers.css';
+
+type GradientName = 'depth' | 'along' | 'across';
+type HoverEffectName = 'focus' | 'part' | 'none';
+type FiberStyleName = 'dots' | 'dashes' | 'lines';
+
+export interface GhostFibersProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
+  glowColor?: string;
+  lineColor?: string;
+  secondaryColor?: string;
+  gradient?: GradientName;
+  speed?: number;
+  scale?: number;
+  rotation?: number;
+  rollSpeed?: number;
+  layers?: number;
+  waves?: number;
+  twist?: number;
+  threads?: number;
+  volume?: number;
+  spread?: number;
+  density?: number;
+  thickness?: number;
+  flow?: number;
+  fiberStyle?: FiberStyleName;
+  tips?: number;
+  foldGlow?: number;
+  perspective?: number;
+  depthOfField?: number;
+  focusDepth?: number;
+  particles?: number;
+  sparkle?: number;
+  glow?: number;
+  brightness?: number;
+  vignette?: number;
+  grain?: number;
+  mouseInteraction?: boolean;
+  hoverEffect?: HoverEffectName;
+  mouseStrength?: number;
+  pulseOnClick?: boolean;
+  intro?: boolean;
+  lightMode?: boolean;
+  paused?: boolean;
+  dpr?: number;
+}
+
+interface GhostFibersSettings {
+  glowColor: string;
+  lineColor: string;
+  secondaryColor: string;
+  gradient: number;
+  speed: number;
+  scale: number;
+  rotation: number;
+  rollSpeed: number;
+  layers: number;
+  waves: number;
+  twist: number;
+  threads: number;
+  volume: number;
+  spread: number;
+  density: number;
+  thickness: number;
+  flow: number;
+  dotLength: number;
+  tips: number;
+  foldGlow: number;
+  perspective: number;
+  depthOfField: number;
+  focusDepth: number;
+  particles: number;
+  sparkle: number;
+  glow: number;
+  brightness: number;
+  vignette: number;
+  grain: number;
+  mouseInteraction: boolean;
+  hover: number;
+  mouseStrength: number;
+  pulseOnClick: boolean;
+  intro: boolean;
+  lightMode: boolean;
+  paused: boolean;
+  dpr?: number;
+}
+
+interface RenderTarget {
+  texture: WebGLTexture | null;
+  framebuffer: WebGLFramebuffer | null;
+  width: number;
+  height: number;
+}
+
+interface LinkedProgram {
+  program: WebGLProgram;
+  uniforms: Record<string, WebGLUniformLocation | null>;
+}
+
+interface Camera {
+  eye: number[];
+  viewProj: number[];
+  orient: number[];
+}
+
+interface ScreenPoint {
+  x: number;
+  y: number;
+  depth: number;
+}
+
+interface RibbonHit {
+  gap: number;
+  s: number;
+  ribbon: number;
+  depth: number;
+}
+
+interface GhostFibersState {
+  time: number;
+  roll: number;
+  flow: number;
+  frame: number;
+  intro: number;
+  width: number;
+  height: number;
+  fit: number;
+  colorKey: string;
+  glow: number[];
+  line: number[];
+  secondary: number[];
+  pointer: { x: number; y: number; inside: boolean };
+  hover: { x: number; y: number; presence: number; placed: boolean };
+  look: { x: number; y: number; vx: number; vy: number };
+  focus: number;
+  pulse: { s: number; age: number; strength: number; ribbon: number };
+  camera: Camera | null;
+}
 
 const MAX_RENDER_DIM = 2400;
 const BLOOM_LEVELS = 5;
@@ -10,11 +147,11 @@ const INTRO_SECONDS = 2.6;
 const CAMERA = 7.5;
 const FOV = 0.56;
 const RIBBON_LENGTH = 24;
-const HOVER_EFFECTS = { focus: 0, part: 1, none: 2 };
-const FIBER_STYLES = { dots: 0, dashes: 0.45, lines: 1 };
-const GRADIENTS = { depth: 0, along: 1, across: 2 };
+const HOVER_EFFECTS: Record<HoverEffectName, number> = { focus: 0, part: 1, none: 2 };
+const FIBER_STYLES: Record<FiberStyleName, number> = { dots: 0, dashes: 0.45, lines: 1 };
+const GRADIENTS: Record<GradientName, number> = { depth: 0, along: 1, across: 2 };
 const RIBBON_TINT = [0, 0.75, 0.35];
-const PLACEMENTS = [
+const PLACEMENTS: ReadonlyArray<readonly [number, number, number, number]> = [
   [0, 0, 0, 0],
   [1.9, -4.6, -0.08, 2.4],
   [-1.05, 2.0, 0.12, 4.1]
@@ -458,9 +595,9 @@ const COMPOSITE_UNIFORMS = [
   'uDpr'
 ];
 
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-const compile = (gl, type, source) => {
+const compile = (gl: WebGL2RenderingContext, type: number, source: string): WebGLShader | null => {
   const shader = gl.createShader(type);
   if (!shader) return null;
   gl.shaderSource(shader, source);
@@ -470,7 +607,12 @@ const compile = (gl, type, source) => {
   return null;
 };
 
-const link = (gl, vertexSource, fragmentSource, names) => {
+const link = (
+  gl: WebGL2RenderingContext,
+  vertexSource: string,
+  fragmentSource: string,
+  names: string[]
+): LinkedProgram | null => {
   const vertex = compile(gl, gl.VERTEX_SHADER, vertexSource);
   const fragment = compile(gl, gl.FRAGMENT_SHADER, fragmentSource);
   const program = gl.createProgram();
@@ -484,29 +626,32 @@ const link = (gl, vertexSource, fragmentSource, names) => {
     gl.deleteProgram(program);
     return null;
   }
-  const uniforms = {};
+  const uniforms: Record<string, WebGLUniformLocation | null> = {};
   for (const name of names) uniforms[name] = gl.getUniformLocation(program, name);
   return { program, uniforms };
 };
 
-const frustum = (fov, aspect, near, far) => {
+const frustum = (fov: number, aspect: number, near: number, far: number): number[] => {
   const f = 1 / Math.tan(fov / 2);
   const nf = 1 / (near - far);
   return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
 };
 
-const multiply = (a, b) => {
-  const out = new Array(16);
+const multiply = (a: number[], b: number[]): number[] => {
+  const out = new Array<number>(16);
   for (let col = 0; col < 4; col += 1) {
     for (let row = 0; row < 4; row += 1) {
       out[col * 4 + row] =
-        a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+        a[row]! * b[col * 4]! +
+        a[4 + row]! * b[col * 4 + 1]! +
+        a[8 + row]! * b[col * 4 + 2]! +
+        a[12 + row]! * b[col * 4 + 3]!;
     }
   }
   return out;
 };
 
-const orientation = (yaw, pitch, roll) => {
+const orientation = (yaw: number, pitch: number, roll: number): number[] => {
   const cy = Math.cos(yaw);
   const sy = Math.sin(yaw);
   const cp = Math.cos(pitch);
@@ -516,11 +661,12 @@ const orientation = (yaw, pitch, roll) => {
   const ry = [cy, 0, -sy, 0, 1, 0, sy, 0, cy];
   const rx = [1, 0, 0, 0, cp, sp, 0, -sp, cp];
   const rz = [cr, sr, 0, -sr, cr, 0, 0, 0, 1];
-  const mul = (a, b) => {
-    const out = new Array(9);
+  const mul = (a: number[], b: number[]): number[] => {
+    const out = new Array<number>(9);
     for (let col = 0; col < 3; col += 1) {
       for (let row = 0; row < 3; row += 1) {
-        out[col * 3 + row] = a[row] * b[col * 3] + a[3 + row] * b[col * 3 + 1] + a[6 + row] * b[col * 3 + 2];
+        out[col * 3 + row] =
+          a[row]! * b[col * 3]! + a[3 + row]! * b[col * 3 + 1]! + a[6 + row]! * b[col * 3 + 2]!;
       }
     }
     return out;
@@ -528,10 +674,10 @@ const orientation = (yaw, pitch, roll) => {
   return mul(rz, mul(rx, ry));
 };
 
-const applyMat3 = (m, v) => [
-  m[0] * v[0] + m[3] * v[1] + m[6] * v[2],
-  m[1] * v[0] + m[4] * v[1] + m[7] * v[2],
-  m[2] * v[0] + m[5] * v[1] + m[8] * v[2]
+const applyMat3 = (m: number[], v: number[]): number[] => [
+  m[0]! * v[0]! + m[3]! * v[1]! + m[6]! * v[2]!,
+  m[1]! * v[0]! + m[4]! * v[1]! + m[7]! * v[2]!,
+  m[2]! * v[0]! + m[5]! * v[1]! + m[8]! * v[2]!
 ];
 
 const GhostFibers = ({
@@ -573,11 +719,11 @@ const GhostFibers = ({
   paused = false,
   dpr,
   ...rest
-}) => {
-  const containerRef = useRef(null);
-  const canvasRef = useRef(null);
-  const wakeRef = useRef(null);
-  const settings = {
+}: GhostFibersProps) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wakeRef = useRef<(() => void) | null>(null);
+  const settings: GhostFibersSettings = {
     glowColor: String(glowColor),
     lineColor: lineColor ? String(lineColor) : '',
     secondaryColor: secondaryColor ? String(secondaryColor) : '',
@@ -616,7 +762,7 @@ const GhostFibers = ({
     paused,
     dpr
   };
-  const settingsRef = useRef(settings);
+  const settingsRef = useRef<GhostFibersSettings>(settings);
   settingsRef.current = settings;
 
   useEffect(() => {
@@ -641,8 +787,8 @@ const GhostFibers = ({
     if (!dots || !dust || !bright || !down || !up || !composite) return undefined;
 
     const format = floatTargets ? gl.RGBA16F : gl.RGBA8;
-    const makeTarget = () => ({ texture: null, framebuffer: gl.createFramebuffer(), width: 0, height: 0 });
-    const allocate = (target, width, height) => {
+    const makeTarget = (): RenderTarget => ({ texture: null, framebuffer: gl.createFramebuffer(), width: 0, height: 0 });
+    const allocate = (target: RenderTarget, width: number, height: number) => {
       if (target.texture && target.width === width && target.height === height) return;
       if (target.texture) gl.deleteTexture(target.texture);
       const texture = gl.createTexture();
@@ -667,7 +813,7 @@ const GhostFibers = ({
     probe.height = 1;
     const probeContext = probe.getContext('2d', { willReadFrequently: true });
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-    const state = {
+    const state: GhostFibersState = {
       time: 0,
       roll: 0,
       flow: 0,
@@ -692,18 +838,18 @@ const GhostFibers = ({
     let visible = true;
     let alive = true;
 
-    const toRgb = (value, fallback) => {
+    const toRgb = (value: string | undefined, fallback: number[]): number[] => {
       if (!probeContext || !value) return fallback;
       const css = /^[0-9a-f]{3,8}$/i.test(value) ? `#${value}` : value;
       probeContext.clearRect(0, 0, 1, 1);
       probeContext.fillStyle = '#000000';
       probeContext.fillStyle = css;
       probeContext.fillRect(0, 0, 1, 1);
-      const [r, g, b] = probeContext.getImageData(0, 0, 1, 1).data;
-      return [r / 255, g / 255, b / 255];
+      const data = probeContext.getImageData(0, 0, 1, 1).data;
+      return [data[0]! / 255, data[1]! / 255, data[2]! / 255];
     };
 
-    const resolveColors = s => {
+    const resolveColors = (s: GhostFibersSettings): void => {
       const key = `${s.glowColor}|${s.lineColor}|${s.secondaryColor}|${s.lightMode}`;
       if (key === state.colorKey) return;
       state.colorKey = key;
@@ -713,8 +859,8 @@ const GhostFibers = ({
       else state.line = s.lightMode ? state.glow : state.glow.map(c => c + (1 - c) * 0.72);
     };
 
-    const centerLocal = (s, t, ribbon, waves) => {
-      const place = PLACEMENTS[ribbon];
+    const centerLocal = (s: number, t: number, ribbon: number, waves: number): [number, number, number] => {
+      const place = PLACEMENTS[ribbon]!;
       const ph = place[3];
       const x = s * RIBBON_LENGTH;
       const y =
@@ -725,27 +871,27 @@ const GhostFibers = ({
       return [x, y, z];
     };
 
-    const cameraFor = s => {
+    const cameraFor = (s: GhostFibersSettings): Camera => {
       const aspect = state.width / Math.max(state.height, 1);
-      const eye = [0, 0, CAMERA];
+      const eye: [number, number, number] = [0, 0, CAMERA];
       const projection = frustum(FOV, aspect, 0.1, 60);
       const view = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -eye[0], -eye[1], -eye[2], 1];
       const orient = orientation(s.perspective * 0.85 + state.look.x * 0.22, 0.12 - state.look.y * 0.14, s.rotation);
       return { eye, viewProj: multiply(projection, view), orient };
     };
 
-    const screenOf = (camera, world) => {
+    const screenOf = (camera: Camera, world: number[]): ScreenPoint => {
       const m = camera.viewProj;
-      const x = m[0] * world[0] + m[4] * world[1] + m[8] * world[2] + m[12];
-      const y = m[1] * world[0] + m[5] * world[1] + m[9] * world[2] + m[13];
-      const w = m[3] * world[0] + m[7] * world[1] + m[11] * world[2] + m[15];
+      const x = m[0]! * world[0]! + m[4]! * world[1]! + m[8]! * world[2]! + m[12]!;
+      const y = m[1]! * world[0]! + m[5]! * world[1]! + m[9]! * world[2]! + m[13]!;
+      const w = m[3]! * world[0]! + m[7]! * world[1]! + m[11]! * world[2]! + m[15]!;
       return { x: ((x / w) * 0.5 + 0.5) * state.width, y: (0.5 - (y / w) * 0.5) * state.height, depth: w };
     };
 
-    const nearestOnRibbon = (s, px, py) => {
+    const nearestOnRibbon = (s: GhostFibersSettings, px: number, py: number): RibbonHit | null => {
       const camera = state.camera;
       if (!camera) return null;
-      let best = null;
+      let best: RibbonHit | null = null;
       for (let ribbon = 0; ribbon < s.layers; ribbon += 1) {
         for (let i = 0; i <= 96; i += 1) {
           const u = i / 96 - 0.5;
@@ -759,7 +905,7 @@ const GhostFibers = ({
       return best;
     };
 
-    const resize = () => {
+    const resize = (): void => {
       const s = settingsRef.current;
       const width = Math.max(1, container.clientWidth);
       const height = Math.max(1, container.clientHeight);
@@ -778,18 +924,18 @@ const GhostFibers = ({
       render();
     };
 
-    const drawPass = (program, target, source, texel) => {
+    const drawPass = (program: LinkedProgram, target: RenderTarget, source: RenderTarget, texel: number[]): void => {
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
       gl.viewport(0, 0, target.width, target.height);
       gl.useProgram(program.program);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, source.texture);
-      gl.uniform1i(program.uniforms.uSource, 0);
-      gl.uniform2f(program.uniforms.uTexel, texel[0], texel[1]);
+      gl.uniform1i(program.uniforms.uSource!, 0);
+      gl.uniform2f(program.uniforms.uTexel!, texel[0]!, texel[1]!);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
 
-    const render = () => {
+    const render = (): void => {
       const s = settingsRef.current;
       resolveColors(s);
       const camera = cameraFor(s);
@@ -813,51 +959,51 @@ const GhostFibers = ({
       const load = Math.pow((s.threads / 72) * s.density * area, -0.75);
       gl.useProgram(dots.program);
       const u = dots.uniforms;
-      gl.uniform1f(u.uTime, state.time);
-      gl.uniform1f(u.uTwist, s.twist);
-      gl.uniform1f(u.uRoll, state.roll);
-      gl.uniform1f(u.uWaves, s.waves);
-      gl.uniform1f(u.uWidth, 0.62 * s.spread);
-      gl.uniformMatrix3fv(u.uOrient, false, camera.orient);
-      gl.uniform1f(u.uScale, s.scale * state.fit);
-      gl.uniformMatrix4fv(u.uViewProj, false, camera.viewProj);
-      gl.uniform3f(u.uEye, camera.eye[0], camera.eye[1], camera.eye[2]);
-      gl.uniform2f(u.uViewport, canvas.width, canvas.height);
-      gl.uniform1f(u.uDpr, ratio);
-      gl.uniform1f(u.uFibers, s.threads);
-      gl.uniform1f(u.uDots, dotsPerFiber);
-      gl.uniform1f(u.uFlow, state.flow);
-      gl.uniform1f(u.uSize, 1.6 * s.thickness);
-      gl.uniform1f(u.uFocus, state.focus);
-      gl.uniform1f(u.uDof, s.depthOfField);
-      gl.uniform1f(u.uMaxCoc, blurCap);
-      gl.uniform1f(u.uFocal, CAMERA);
-      gl.uniform1f(u.uIntro, introEase);
-      gl.uniform4f(u.uPulse, state.pulse.s, state.pulse.age, state.pulse.strength, state.pulse.ribbon);
+      gl.uniform1f(u.uTime!, state.time);
+      gl.uniform1f(u.uTwist!, s.twist);
+      gl.uniform1f(u.uRoll!, state.roll);
+      gl.uniform1f(u.uWaves!, s.waves);
+      gl.uniform1f(u.uWidth!, 0.62 * s.spread);
+      gl.uniformMatrix3fv(u.uOrient!, false, camera.orient);
+      gl.uniform1f(u.uScale!, s.scale * state.fit);
+      gl.uniformMatrix4fv(u.uViewProj!, false, camera.viewProj);
+      gl.uniform3f(u.uEye!, camera.eye[0]!, camera.eye[1]!, camera.eye[2]!);
+      gl.uniform2f(u.uViewport!, canvas.width, canvas.height);
+      gl.uniform1f(u.uDpr!, ratio);
+      gl.uniform1f(u.uFibers!, s.threads);
+      gl.uniform1f(u.uDots!, dotsPerFiber);
+      gl.uniform1f(u.uFlow!, state.flow);
+      gl.uniform1f(u.uSize!, 1.6 * s.thickness);
+      gl.uniform1f(u.uFocus!, state.focus);
+      gl.uniform1f(u.uDof!, s.depthOfField);
+      gl.uniform1f(u.uMaxCoc!, blurCap);
+      gl.uniform1f(u.uFocal!, CAMERA);
+      gl.uniform1f(u.uIntro!, introEase);
+      gl.uniform4f(u.uPulse!, state.pulse.s, state.pulse.age, state.pulse.strength, state.pulse.ribbon);
       gl.uniform4f(
-        u.uHover,
+        u.uHover!,
         state.hover.x * ratio,
         (state.height - state.hover.y) * ratio,
         140 * ratio,
         state.hover.presence * s.mouseStrength
       );
-      gl.uniform1f(u.uPart, s.hover === 1 ? 1 : 0);
-      gl.uniform1f(u.uDotLength, s.dotLength);
-      gl.uniform1f(u.uSparkle, s.sparkle);
-      gl.uniform1f(u.uDepthSpread, 0.12);
-      gl.uniform1f(u.uVolume, s.volume);
-      gl.uniform3f(u.uGlowColor, state.glow[0], state.glow[1], state.glow[2]);
-      gl.uniform3f(u.uLineColor, state.line[0], state.line[1], state.line[2]);
-      gl.uniform3f(u.uSecondaryColor, state.secondary[0], state.secondary[1], state.secondary[2]);
-      gl.uniform1f(u.uTips, s.tips);
-      gl.uniform1f(u.uGradient, s.gradient);
-      gl.uniform1f(u.uFold, s.foldGlow);
+      gl.uniform1f(u.uPart!, s.hover === 1 ? 1 : 0);
+      gl.uniform1f(u.uDotLength!, s.dotLength);
+      gl.uniform1f(u.uSparkle!, s.sparkle);
+      gl.uniform1f(u.uDepthSpread!, 0.12);
+      gl.uniform1f(u.uVolume!, s.volume);
+      gl.uniform3f(u.uGlowColor!, state.glow[0]!, state.glow[1]!, state.glow[2]!);
+      gl.uniform3f(u.uLineColor!, state.line[0]!, state.line[1]!, state.line[2]!);
+      gl.uniform3f(u.uSecondaryColor!, state.secondary[0]!, state.secondary[1]!, state.secondary[2]!);
+      gl.uniform1f(u.uTips!, s.tips);
+      gl.uniform1f(u.uGradient!, s.gradient);
+      gl.uniform1f(u.uFold!, s.foldGlow);
       for (let ribbon = 0; ribbon < s.layers; ribbon += 1) {
-        const place = PLACEMENTS[ribbon];
-        gl.uniform1f(u.uRibbon, ribbon);
-        gl.uniform4f(u.uPlace, place[0], place[1], place[2], place[3]);
-        gl.uniform1f(u.uGain, RIBBON_GAIN[ribbon] * load);
-        gl.uniform1f(u.uTint, RIBBON_TINT[ribbon]);
+        const place = PLACEMENTS[ribbon]!;
+        gl.uniform1f(u.uRibbon!, ribbon);
+        gl.uniform4f(u.uPlace!, place[0], place[1], place[2], place[3]);
+        gl.uniform1f(u.uGain!, RIBBON_GAIN[ribbon]! * load);
+        gl.uniform1f(u.uTint!, RIBBON_TINT[ribbon]!);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, s.threads * dotsPerFiber);
       }
 
@@ -865,23 +1011,23 @@ const GhostFibers = ({
       if (dustCount > 0) {
         gl.useProgram(dust.program);
         const d = dust.uniforms;
-        gl.uniformMatrix4fv(d.uViewProj, false, camera.viewProj);
-        gl.uniform2f(d.uViewport, canvas.width, canvas.height);
-        gl.uniform1f(d.uDpr, ratio);
-        gl.uniform1f(d.uTime, state.time);
-        gl.uniform1f(d.uSize, 2.2 * s.thickness);
-        gl.uniform1f(d.uFocus, state.focus);
-        gl.uniform1f(d.uDof, s.depthOfField);
-        gl.uniform1f(d.uMaxCoc, 22);
-        gl.uniform1f(d.uFocal, CAMERA);
-        gl.uniform1f(d.uIntro, introEase);
-        gl.uniform1f(d.uSparkle, s.sparkle);
-        gl.uniform1f(d.uScale, s.scale * state.fit);
-        gl.uniform1f(d.uGradient, s.gradient);
-        gl.uniform1f(d.uGain, 1 / s.thickness);
-        gl.uniform3f(d.uGlowColor, state.glow[0], state.glow[1], state.glow[2]);
-        gl.uniform3f(d.uLineColor, state.line[0], state.line[1], state.line[2]);
-        gl.uniform3f(d.uSecondaryColor, state.secondary[0], state.secondary[1], state.secondary[2]);
+        gl.uniformMatrix4fv(d.uViewProj!, false, camera.viewProj);
+        gl.uniform2f(d.uViewport!, canvas.width, canvas.height);
+        gl.uniform1f(d.uDpr!, ratio);
+        gl.uniform1f(d.uTime!, state.time);
+        gl.uniform1f(d.uSize!, 2.2 * s.thickness);
+        gl.uniform1f(d.uFocus!, state.focus);
+        gl.uniform1f(d.uDof!, s.depthOfField);
+        gl.uniform1f(d.uMaxCoc!, 22);
+        gl.uniform1f(d.uFocal!, CAMERA);
+        gl.uniform1f(d.uIntro!, introEase);
+        gl.uniform1f(d.uSparkle!, s.sparkle);
+        gl.uniform1f(d.uScale!, s.scale * state.fit);
+        gl.uniform1f(d.uGradient!, s.gradient);
+        gl.uniform1f(d.uGain!, 1 / s.thickness);
+        gl.uniform3f(d.uGlowColor!, state.glow[0]!, state.glow[1]!, state.glow[2]!);
+        gl.uniform3f(d.uLineColor!, state.line[0]!, state.line[1]!, state.line[2]!);
+        gl.uniform3f(d.uSecondaryColor!, state.secondary[0]!, state.secondary[1]!, state.secondary[2]!);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, dustCount);
       }
       gl.disable(gl.BLEND);
@@ -896,14 +1042,14 @@ const GhostFibers = ({
             Math.max(1, Math.round(canvas.height / 2 ** (index + 1)))
           );
         });
-        drawPass(bright, chain[0], scene, [0.5 / scene.width, 0.5 / scene.height]);
+        drawPass(bright, chain[0]!, scene, [0.5 / scene.width, 0.5 / scene.height]);
         for (let index = 1; index < BLOOM_LEVELS; index += 1) {
-          drawPass(down, chain[index], chain[index - 1], [1 / chain[index - 1].width, 1 / chain[index - 1].height]);
+          drawPass(down, chain[index]!, chain[index - 1]!, [1 / chain[index - 1]!.width, 1 / chain[index - 1]!.height]);
         }
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.ONE, gl.ONE);
         for (let index = BLOOM_LEVELS - 1; index > 0; index -= 1) {
-          drawPass(up, chain[index - 1], chain[index], [0.5 / chain[index].width, 0.5 / chain[index].height]);
+          drawPass(up, chain[index - 1]!, chain[index]!, [0.5 / chain[index]!.width, 0.5 / chain[index]!.height]);
         }
         gl.disable(gl.BLEND);
       }
@@ -917,17 +1063,17 @@ const GhostFibers = ({
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, scene.texture);
       gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, blooming ? chain[0].texture : scene.texture);
-      gl.uniform1i(c.uScene, 0);
-      gl.uniform1i(c.uBloom, 1);
-      gl.uniform1f(c.uGlow, blooming ? s.glow : 0);
-      gl.uniform1f(c.uBrightness, s.brightness);
-      gl.uniform1f(c.uLightMode, s.lightMode ? 1 : 0);
-      gl.uniform1f(c.uGrain, s.grain);
-      gl.uniform1f(c.uVignette, s.vignette);
-      gl.uniform1f(c.uFrame, state.frame % 977);
-      gl.uniform2f(c.uView, canvas.width, canvas.height);
-      gl.uniform1f(c.uDpr, ratio);
+      gl.bindTexture(gl.TEXTURE_2D, blooming ? chain[0]!.texture : scene.texture);
+      gl.uniform1i(c.uScene!, 0);
+      gl.uniform1i(c.uBloom!, 1);
+      gl.uniform1f(c.uGlow!, blooming ? s.glow : 0);
+      gl.uniform1f(c.uBrightness!, s.brightness);
+      gl.uniform1f(c.uLightMode!, s.lightMode ? 1 : 0);
+      gl.uniform1f(c.uGrain!, s.grain);
+      gl.uniform1f(c.uVignette!, s.vignette);
+      gl.uniform1f(c.uFrame!, state.frame % 977);
+      gl.uniform2f(c.uView!, canvas.width, canvas.height);
+      gl.uniform1f(c.uDpr!, ratio);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, null);
@@ -936,7 +1082,7 @@ const GhostFibers = ({
       gl.bindVertexArray(null);
     };
 
-    const frame = now => {
+    const frame = (now: number): void => {
       raf = 0;
       if (!alive || !visible || document.hidden) return;
       const s = settingsRef.current;
@@ -994,11 +1140,11 @@ const GhostFibers = ({
       else last = 0;
     };
 
-    const wake = () => {
+    const wake = (): void => {
       if (!raf && alive && visible && !document.hidden) raf = requestAnimationFrame(frame);
     };
 
-    const onPointerMove = event => {
+    const onPointerMove = (event: PointerEvent): void => {
       const rect = container.getBoundingClientRect();
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
@@ -1008,7 +1154,7 @@ const GhostFibers = ({
       wake();
     };
 
-    const onPointerDown = event => {
+    const onPointerDown = (event: PointerEvent): void => {
       const s = settingsRef.current;
       if (!s.mouseInteraction || !s.pulseOnClick || event.button !== 0 || reduce) return;
       if (
@@ -1025,12 +1171,12 @@ const GhostFibers = ({
       wake();
     };
 
-    const onPointerLeave = () => {
+    const onPointerLeave = (): void => {
       state.pointer.inside = false;
       wake();
     };
 
-    const onVisibility = () => {
+    const onVisibility = (): void => {
       last = 0;
       wake();
     };
